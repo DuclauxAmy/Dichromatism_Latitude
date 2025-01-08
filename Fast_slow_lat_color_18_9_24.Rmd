@@ -1,0 +1,517 @@
+---
+title: "Colour_life_history_latitude"
+author: "Kevin Healy"
+date: "2024-06-27"
+output: html_document
+---
+
+```{r packages, include=FALSE}
+
+library(MCMCglmm)
+library(caper)
+library(mulTree)
+library(phytools)
+
+
+```
+
+
+```{r setup, include=FALSE}
+
+col_data <- read.csv("Cooney_Scholer_Lislevand_no_na_data.csv")
+
+col_data$animal <- col_data$latin_name
+
+col_data_temp <- data.frame(latin_name = col_data$latin_name,
+                           animal = col_data$animal,
+                           VolumeUVS = col_data$VolumeUVS,
+                           VolumeVS = col_data$VolumeVS,
+                           LociUVS = col_data$LociUVS,
+                           LociVS = col_data$LociVS,
+                           MidpointLat = abs(col_data$MidpointLat),
+                           BodyMass = col_data$BodyMass,
+                           survival = col_data$survival,
+                           clutch = col_data$clutch,
+                           lat =  col_data$lat,
+                           long = col_data$long,
+                           Sex = col_data$Sex,
+                           Mating_System = col_data$Mating_System,
+                           MatingSys = col_data$MatingSys)
+
+col_data_fin <- na.omit(col_data_temp)
+
+col_data_fin$log10BodyMass <- log10(col_data_fin$BodyMass)
+col_data_fin$log10survival <- log10(col_data_fin$survival)
+col_data_fin$log10clutch <- log10(col_data_fin$clutch)
+
+```
+
+
+Phylo
+
+```{r phylo}
+
+phylo <- read.tree("bird_phylo.tre")
+phylo <- phylo[1:100]
+class(phylo)
+
+
+```
+
+Match
+```{r phylo match}
+
+match_species <- data.frame(species_m = unique(col_data_fin$latin_name),
+                   species_d = unique(col_data_fin$latin_name))
+                   
+phylo_match <- list()
+
+for (i in 1:100){
+phylo_match[[i]] <- comparative.data(phy = phylo[[i]],
+                 data = match_species, 
+                 names.col = species_m,
+                 vcv = TRUE)$phy
+}
+
+class(phylo_match) <- "multiPhylo"
+class(phylo_match)
+
+
+```
+
+```{r multy}
+multree_birds <- as.mulTree(data= col_data_fin,
+                            tree= phylo_match,
+                            taxa= "latin_name")
+
+multree_birds$random.terms <- ~animal + sp.col
+
+
+class(multree_birds)
+names(multree_birds)
+
+```
+
+
+
+
+
+Run model 
+
+```{r paramaters}
+
+parameters <- c(2400000, 1000, 400000)
+
+
+priors <-list(R = list(V = 1, nu=0.002), 
+            G = list(G1=list(V = 1, nu=0.002, alpha.mu= 0, alpha.V= 10^3),
+                     G2=list(V = 1, nu=0.002, alpha.mu= 0, alpha.V= 10^3)
+                     ))
+
+```
+
+
+```{r multree survival resids}
+Survial_mass <- survival ~ log10(BodyMass)
+
+mulTree(mulTree.data = multree_birds,
+        formula = Survial_mass,
+        priors = priors,
+        parameters = parameters,
+        output = "Surv_mass",
+        ESS= 1000,
+        family= "gaussian",
+        chains= 2)
+
+Surv_mass_multree <- read.mulTree("Surv_mass")
+
+resids_surviv <- col_data_fin$survival - c(summary(Surv_mass_multree)[1,1] 
+                + log10(col_data_fin$BodyMass)*summary(Surv_mass_multree)[2,1])
+
+
+```
+
+
+
+```{r multree clutch resids}
+clutch_mass <- clutch ~ log10(BodyMass)
+
+mulTree(mulTree.data = multree_birds,
+        formula = clutch_mass,
+        priors = priors,
+        parameters = parameters,
+        output = "clutch_mass",
+        ESS= 1000,
+        family= "gaussian",
+        chains= 2)
+
+clutch_mass_multree <- read.mulTree("clutch_mass")
+
+resids_clutch <- col_data_fin$clutch - c(summary(clutch_mass_multree)[1,1] 
+                + log10(col_data_fin$BodyMass)*summary(clutch_mass_multree)[2,1])
+
+
+```
+
+
+```{r multree predicted_data}
+
+
+col_data_fin_pred <- data.frame(col_data_fin,
+                           resids_surviv,
+                           resids_clutch)
+
+multree_predict <- as.mulTree(data= col_data_fin_pred,
+                            tree= phylo_match,
+                            taxa= "latin_name")
+
+multree_predict$random.terms <- ~animal + sp.col
+
+```
+
+
+Now run the main models using the residuals
+
+
+```{r fast-slow survival}
+
+main_surv <- LociVS ~ MidpointLat*Sex + log10(BodyMass)*Sex + resids_surviv*Sex + MatingSys*Sex
+
+mulTree(mulTree.data = multree_predict,
+        formula = main_surv,
+        priors = priors,
+        parameters = parameters,
+        output = "main_surv",
+        ESS= 1000,
+        family= "gaussian",
+        chains= 2)
+
+main_surv_multree <- read.mulTree("main_surv")
+
+```
+
+
+Now with clutch size residuals
+
+
+```{r fast-slow clutch}
+
+main_clutch <- LociVS ~ MidpointLat*Sex + log10(BodyMass)*Sex + resids_clutch*Sex + MatingSys*Sex
+
+mulTree(mulTree.data = multree_predict,
+        formula = main_clutch,
+        priors = priors,
+        parameters = parameters,
+        output = "main_clutch",
+        ESS= 1000,
+        family= "gaussian",
+        chains= 2)
+
+main_clutch_multree <- read.mulTree("main_clutch")
+
+```
+
+
+
+
+Full model with everything in it without correcting for body size
+
+
+```{r fast-slow survival}
+
+main_surv_no_ris <- LociVS ~ MidpointLat*Sex + log10(BodyMass)*Sex + surviv*Sex + MatingSys*Sex
+
+mulTree(mulTree.data = multree_predict,
+        formula = main_surv_no_ris,
+        priors = priors,
+        parameters = parameters,
+        output = "main_surv_no_ris",
+        ESS= 1000,
+        family= "gaussian",
+        chains= 2)
+
+main_surv_no_ris_multree <- read.mulTree("main_surv_no_ris")
+
+```
+
+
+Now with clutch size
+
+
+```{r fast-slow clutch}
+
+main_clutch_no_ris <- LociVS ~ MidpointLat*Sex + log10(BodyMass)*Sex + clutch*Sex + MatingSys*Sex
+
+mulTree(mulTree.data = multree_predict,
+        formula = main_clutch_no_ris,
+        priors = priors,
+        parameters = parameters,
+        output = "main_clutch_no_ris",
+        ESS= 1000,
+        family= "gaussian",
+        chains= 2)
+
+main_clutch_no_ris_multree <- read.mulTree("main_clutch_no_ris")
+
+```
+
+
+#Now just run it on tropical species
+
+
+Model with just tropical species in it.
+
+
+Match
+```{r phylo match tropical}
+
+col_data_trop <-  col_data_fin_pred[col_data_fin_pred$MidpointLat < 23.5,]
+
+col_data_te <-  col_data_fin_pred[col_data_fin_pred$MidpointLat > 23.5,]
+
+match_trop <- data.frame(species_m = unique(col_data_trop$latin_name),
+                   species_d = unique(col_data_trop$latin_name))
+                   
+match_te <- data.frame(species_m = unique(col_data_te$latin_name),
+                   species_d = unique(col_data_te$latin_name))
+
+                   
+phylo_trop <- list()
+phylo_te <- list()
+
+
+for (i in 1:100){
+  
+  phylo_trop[[i]] <- comparative.data(phy = phylo[[i]],
+                 data = match_trop, 
+                 names.col = species_m,
+                 vcv = TRUE)$phy
+  
+  phylo_te[[i]] <- comparative.data(phy = phylo[[i]],
+                 data = match_te, 
+                 names.col = species_m,
+                 vcv = TRUE)$phy
+  
+}
+
+class(phylo_trop) <- "multiPhylo"
+class(phylo_te) <- "multiPhylo"
+
+
+multree_trop <- as.mulTree(data= col_data_trop,
+                            tree= phylo_trop,
+                            taxa= "latin_name")
+
+multree_trop$random.terms <- ~animal + sp.col
+
+
+#temperate
+multree_te <- as.mulTree(data= col_data_te,
+                            tree= phylo_te,
+                            taxa= "latin_name")
+
+multree_te$random.terms <- ~animal + sp.col
+
+```
+
+
+#Tropical
+
+First test if survival is correlated with latitude for tropical.
+
+```{r lat trop test model}
+
+lat_trop_surv_test <- MidpointLat ~ resids_surviv*Sex
+
+mulTree(mulTree.data = multree_trop,
+        formula = lat_trop_surv_test,
+        priors = priors,
+        parameters = parameters,
+        output = "lat_trop_surv_test",
+        ESS= 1000,
+        family= "gaussian",
+        chains= 2)
+
+lat_trop_surv_test_multree <- read.mulTree("lat_trop_surv_test")
+
+```
+
+
+Same for clutch size is correlated with latitude for tropical.
+
+```{r lat trop test model}
+
+lat_trop_clutch_test <- MidpointLat ~ resids_clutch*Sex
+
+mulTree(mulTree.data = multree_trop,
+        formula = lat_trop_clutch_test,
+        priors = priors,
+        parameters = parameters,
+        output = "lat_trop_clutch_test",
+        ESS= 1000,
+        family= "gaussian",
+        chains= 2)
+
+lat_trop_clutch_test_multree <- read.mulTree("lat_trop_clutch_test")
+
+```
+
+
+
+Lets test survival for just tropical species
+
+```{r trop test survival }
+
+lat_trop_surv <- LociVS ~log10(BodyMass)*Sex + resids_surviv*Sex + MatingSys*Sex
+
+mulTree(mulTree.data = multree_trop,
+        formula = lat_trop_surv,
+        priors = priors,
+        parameters = parameters,
+        output = "lat_trop_surv",
+        ESS= 1000,
+        family= "gaussian",
+        chains= 2)
+
+lat_trop_surv_multree <- read.mulTree("lat_trop_surv")
+
+```
+
+
+
+Lets test clutch size for just tropical species
+
+```{r trop test survival }
+
+
+lat_trop_clutch <- LociVS ~log10(BodyMass)*Sex + resids_clutch*Sex + MatingSys*Sex
+
+mulTree(mulTree.data = multree_trop,
+        formula = lat_trop_clutch,
+        priors = priors,
+        parameters = parameters,
+        output = "lat_trop_clutch",
+        ESS= 1000,
+        family= "gaussian",
+        chains= 2)
+
+lat_trop_clutch_multree <- read.mulTree("lat_trop_clutch")
+
+```
+
+
+
+
+
+#Temperate
+
+First test if survival is correlated with latitude for tropical.
+
+```{r lat trop test model}
+
+lat_te_surv_test <- MidpointLat ~ resids_surviv*Sex
+
+mulTree(mulTree.data = multree_te,
+        formula = lat_te_surv_test,
+        priors = priors,
+        parameters = parameters,
+        output = "lat_te_surv_test",
+        ESS= 1000,
+        family= "gaussian",
+        chains= 2)
+
+lat_te_surv_test_multree <- read.mulTree("lat_te_surv_test")
+
+```
+
+
+Same for clutch size is correlated with latitude for tropical.
+
+```{r lat trop test model}
+
+lat_te_clutch_test <- MidpointLat ~ resids_clutch*Sex
+
+mulTree(mulTree.data = multree_te,
+        formula = lat_te_clutch_test,
+        priors = priors,
+        parameters = parameters,
+        output = "lat_te_clutch_test",
+        ESS= 1000,
+        family= "gaussian",
+        chains= 2)
+
+lat_te_clutch_test_multree <- read.mulTree("lat_te_clutch_test")
+
+```
+
+
+
+Lets test survival for just tropical species
+
+```{r trop test survival }
+
+lat_te_surv <- LociVS ~log10(BodyMass)*Sex + resids_surviv*Sex + MatingSys*Sex
+
+mulTree(mulTree.data = multree_te,
+        formula = lat_trop_surv,
+        priors = priors,
+        parameters = parameters,
+        output = "lat_te_surv",
+        ESS= 1000,
+        family= "gaussian",
+        chains= 2)
+
+lat_te_surv_multree <- read.mulTree("lat_te_surv")
+
+```
+
+
+
+Lets test clutch size for just tropical species
+
+```{r trop test survival }
+
+
+lat_te_clutch <- LociVS ~log10(BodyMass)*Sex + resids_clutch*Sex + MatingSys*Sex
+
+mulTree(mulTree.data = multree_te,
+        formula = lat_te_clutch,
+        priors = priors,
+        parameters = parameters,
+        output = "lat_te_clutch",
+        ESS= 1000,
+        family= "gaussian",
+        chains= 2)
+
+lat_te_clutch_multree <- read.mulTree("lat_te_clutch")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
