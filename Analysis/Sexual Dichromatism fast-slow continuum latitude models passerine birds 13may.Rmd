@@ -1,0 +1,341 @@
+---
+title: "Sexual Dichromatism is associated with the slow life histories in passerine birds"
+author: "Amy Duclaux"
+date: "2025-05-08"
+output: html_document
+---
+
+This script follows the analysis from Duclaux et al testing the relationship 
+between life history traits and Sexual Dichromatism in passerine birds while 
+accounting for potential confounding issues with latitude and body mass. 
+
+# Upload packages
+
+To complete this analysis we will need to use the standard `caper`, `phytools` 
+and `TreeTools` packages for handling and plotting the phylogeny and the 
+`MCMCglmm` to run the Bayesian phylogentic comparative models. As we also want
+to account for uncertainty in the phylogeny itself so we will use the `mulTree`
+package to run the each model over 100 randomly drawn trees. We can download
+`mulTree` from github here (https://github.com/TGuillerme/mulTree).
+
+```{r packages}
+
+library(caper)
+
+library(phytools)
+
+library(MCMCglmm)
+
+library(TreeTools)
+
+if(!require(devtools)) install.packages("devtools")
+library(devtools)
+install_github("TGuillerme/mulTree", ref = "release")
+library(mulTree)
+
+```
+
+
+# Upload Data
+
+To run the analysis we will use data on the colour intensity fo passarines from
+Cooney et. al 2022 (https://www.nature.com/articles/s41559-022-01714-1), Bird et 
+al 2020 (https://conbio.onlinelibrary.wiley.com/doi/abs/10.1111/cobi.13486) and
+from McQueen et al. 2019 (https://onlinelibrary.wiley.com/doi/abs/10.1111/ele.13375).
+
+```{r load data}
+
+bird_data <- read.csv("ADuclaux birds dichro lat fast-slow mating sys 1may25.csv")
+head(bird_data)
+nrow(bird_data)
+#[1] 7052
+```
+
+For the phylogeny we use Jetz et al. 2012 (https://www.nature.com/articles/nature11631)
+
+```{r load phylogeny}
+
+phylo <- read.tree("bird_phylo.tre")
+class(phylo)
+
+```
+
+
+We will log body mass, maximum lifespan and age at first reproduction and set
+latitude to absolute values.
+
+```{r clean data}
+dichro_bird_data <- data.frame(animal= bird_data$animal,
+                               latin_name= bird_data$latin_name,
+                               order= bird_data$order,
+                               diff_LociVS= bird_data$diff_LociVS,
+                               mod_diff_LociVS= bird_data$mod_diff_LociVS,
+                               dichro= bird_data$dichro, 
+                               sexual_dichro= bird_data$sexual_dichro,
+                               midpoint_lat= abs(bird_data$midpoint_lat),
+                               log_mass= log10(bird_data$mass),
+                               survival= bird_data$survival,
+                               log_max_lifespan= log10(bird_data$max_lifespan),
+                               log_age_first_breed= log10(bird_data$age_first_breed),
+                               mating_system= as.factor(bird_data$mating_system_binary))
+
+dichro_bird_data <- unique(dichro_bird_data)
+dichro_bird_data <- na.omit(dichro_bird_data)
+
+head(dichro_bird_data)
+
+```
+
+
+Create a multiphlyo object of 100 phylogenies which are matched to our dataset.
+
+
+```{r match_phylo}
+
+#Create a dataset of just the names to match
+match_data <- dichro_bird_data[ ,c("latin_name", "order")]
+
+comp_phylo_birds <- list()
+
+for (i in 1:100){
+  
+comp_phylo_birds[[i]] <- comparative.data(phy = phylo[[i]], 
+                                            data = match_data,
+                                            names.col = latin_name, 
+                                            vcv= TRUE)$phy}
+class(comp_phylo_birds)
+#[1] "list"
+
+multiphylo_birds <- as.multiPhylo(comp_phylo_birds)
+class(multiphylo_birds)
+#[1] "multiPhylo"
+
+```
+
+We can now create a mulTree object that contains the 100 phylogenies and the data
+
+```{r multree_birds}
+multree_birds <- as.mulTree(data= dichro_bird_data,
+                            tree= multiphylo_birds,
+                            taxa= "latin_name")
+
+```
+
+We can now set the number of iterations, the thinning and the burnin we will use
+for the models. We will also set the non-informative prior we will use througout
+for the models. 
+
+```{r priors}
+parameters <- c(120000, 50, 20000)
+
+priors <- list(R= list(V= 1, nu= 0.002), 
+               G = list(G1=list(V= 1,n= 2, nu= 0.002)))
+
+```
+
+
+# Models
+
+In order to define the slow-fast continuum we run a model for each of the life
+history traits of maximum lifespan, survival and age at first reporduction as 
+response variables and mass and latitude as explanatory variables. We then use 
+the residuals from these models in a PCA in order to define slow fast contiuum. 
+
+## Survial model
+
+First we run the survival model, due to the long run time of this model we will 
+not evaluate it here but read in a previous run.
+
+```{r Survial multree, eval = FALSE}
+
+#Define the model
+survival_resids_formula <- survival ~ log_mass  + midpoint_lat
+
+mulTree(mulTree.data = multree_birds,
+        formula = survival_resids_formula,
+        priors = priors,
+        parameters = parameters,
+        output = "bird_survival_resids",
+        ESS= 1000,
+        chains= 2)
+
+```
+
+Read in the Survial model
+
+```{r Survial multree read}
+
+multree_surv_res <- read.mulTree("bird_survival_resids")
+str(multree_surv_res)
+
+summary(multree_surv_res)
+
+read.mulTree("bird_survival_resids", convergence= TRUE)
+
+
+surv_resids <- multree_birds$data[,10] - c(summary(multree_surv_res)[1] 
+                                           + multree_birds$data$log_mass*summary(multree_surv_res)[2]
+                                           + multree_birds$data$midpoint_lat*summary(multree_surv_res)[3])
+
+
+surv_resids
+
+```
+
+
+## Max lifespan
+
+Next we run the max lifespan model, due to the long run time of this model we 
+will not evaluate it here but read in a previous run.
+
+```{r Max_lifespan multree, eval = FALSE}
+max_lifespan_resids_formula <- log_max_lifespan ~ log_mass  + midpoint_lat
+
+mulTree(mulTree.data = multree_birds,
+        formula = max_lifespan_resids_formula,
+        priors = priors,
+        parameters = parameters,
+        output = "bird_max_lifespan_resids",
+        ESS= 1000,
+        chains= 2)
+```
+
+Read in the max lifespan model
+
+```{r Max_lifespan multree, eval = FALSE}
+
+multree_max_lifespan_res <- read.mulTree("bird_max_lifespan_resids")
+str(multree_max_lifespan_res)
+
+summary(multree_max_lifespan_res)
+
+read.mulTree("bird_max_lifespan_resids", convergence= TRUE)
+
+
+max_life_resids <- multree_birds$data[,11] - c(summary(multree_max_lifespan_res)[1] 
+                                           + multree_birds$data$log_mass*summary(multree_max_lifespan_res)[2]
+                                            + multree_birds$data$midpoint_lat*summary(multree_max_lifespan_res)[3])
+max_life_resids
+
+
+```
+
+
+## Age at first reproduction
+
+Next we run the age at first reproduction model, due to the long run time of this 
+model we will not evaluate it here but read in a previous run.
+
+```{r age at first reproduction, eval = FALSE}
+first_breed_resids_formula <- log_age_first_breed ~ log_mass  + midpoint_lat
+
+mulTree(mulTree.data = multree_birds,
+        formula = first_breed_resids_formula,
+        priors = priors,
+        parameters = parameters,
+        output = "bird_first_breed_resids",
+        ESS= 1000,
+        chains= 2)
+```
+
+Read in the Age at first reproduction model
+
+```{r age at first reproduction read}
+
+multree_first_breed_res <- read.mulTree("bird_first_breed_resids")
+str(multree_first_breed_res)
+
+summary(multree_first_breed_res)
+
+read.mulTree("bird_first_breed_resids", convergence= TRUE)
+
+
+first_breed_resids <- multree_birds$data[,12] - c(summary(multree_first_breed_res)[1] 
+                                           + multree_birds$data$log_mass*summary(multree_first_breed_res)[2]
+                                           + multree_birds$data$midpoint_lat*summary(multree_first_breed_res)[3])
+first_breed_resids
+
+
+```
+
+
+# PCA
+
+We then create a PCA using the residuals form the above three models
+
+First create a dataset of the residuals.
+```{r resids dataframe}
+res_fast_slow_bird_data <- data.frame(surv_resids, 
+                                      max_life_resids, 
+                                      first_breed_resids)
+
+```
+
+Next run the PCA
+
+```{r PCA}
+pca_data <- data.frame(surv_resids= res_fast_slow_bird_data$surv_resids,
+                       max_life_resids= res_fast_slow_bird_data$max_life_resids,
+                       first_breed_resids= res_fast_slow_bird_data$first_breed_resids)
+biplot(prcomp(pca_data))
+prcomp(pca_data)
+
+#The first axis best defines the slow-fast contiuum so we will use that.
+pca_data2 <- prcomp(pca_data)
+fast_slow_cont <- pca_data2$x[,1]
+
+
+```
+
+# Main model
+
+We now add the fast-slow data to the multree data to set up for the main model.
+
+```{r final model set up}
+fast_slow_bird_data <- data.frame(multree_birds$data, fast_slow_cont)
+head(fast_slow_bird_data)
+nrow(fast_slow_bird_data)
+#[1] 2371
+
+fast_slow_bird_data <- data.frame(animal= fast_slow_bird_data$animal,
+                                  latin_name= fast_slow_bird_data$sp.col,
+                                  diff_LociVS= fast_slow_bird_data$diff_LociVS,
+                                  mod_diff_LociVS= fast_slow_bird_data$mod_diff_LociVS,
+                                  dichro= fast_slow_bird_data$dichro, 
+                                  sexual_dichro= fast_slow_bird_data$sexual_dichro,
+                                  midpoint_lat= fast_slow_bird_data$midpoint_lat,
+                                  log_mass= fast_slow_bird_data$log_mass,
+                                  mating_system= fast_slow_bird_data$mating_system,
+                                  fast_slow_cont= fast_slow_bird_data$fast_slow_cont)
+                               
+multree_birds_fast_slow <- as.mulTree(data= fast_slow_bird_data,
+                                      tree= multiphylo_birds,
+                                      taxa= "latin_name")
+```
+
+Running multree model with diff_LociVS residual fast_slow_cont, midpoint_latitude, 
+log10(mass) and mating_system. As its a long run we will read in a previous run.
+
+```{r Main multree model, eval = FALSE}
+
+multree_fsc_diff_LociVS <- diff_LociVS ~ fast_slow_cont + midpoint_lat 
++ mating_system + log_mass
+
+mulTree(mulTree.data = multree_birds_fast_slow,
+        formula = multree_fsc_diff_LociVS,
+        priors = priors,
+        parameters = parameters,
+        output = "fsc_diff_LociVS_June_4",
+        ESS= 1000,
+        chains= 2)
+```
+
+Read in a previous run of the model 
+
+```{r Main multree model read}
+
+multree_fsc_diff_LociVS_model <- read.mulTree("fsc_diff_LociVS")
+
+summary(multree_fsc_diff_LociVS_model, use.hdr = FALSE)
+
+```
