@@ -1,8 +1,11 @@
 ---
-title: "Sexual Dichromatism is associated with the slow life histories in passerine birds"
+title: Sexual Dichromatism is associated with the slow life histories in passerine
+  birds
 author: "Amy Duclaux"
 date: "2025-05-08"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 This script follows the analysis from Duclaux et al testing the relationship 
@@ -18,7 +21,7 @@ to account for uncertainty in the phylogeny itself so we will use the `mulTree`
 package to run the each model over 100 randomly drawn trees. We can download
 `mulTree` from github here (https://github.com/TGuillerme/mulTree).
 
-```{r packages}
+```{r packages, message=FALSE, warning=FALSE}
 
 library(caper)
 
@@ -46,9 +49,7 @@ from McQueen et al. 2019 (https://onlinelibrary.wiley.com/doi/abs/10.1111/ele.13
 ```{r load data}
 
 bird_data <- read.csv("ADuclaux birds dichro lat fast-slow mating sys 1may25.csv")
-head(bird_data)
-nrow(bird_data)
-#[1] 7052
+
 ```
 
 For the phylogeny we use Jetz et al. 2012 (https://www.nature.com/articles/nature11631)
@@ -69,9 +70,6 @@ dichro_bird_data <- data.frame(animal= bird_data$animal,
                                latin_name= bird_data$latin_name,
                                order= bird_data$order,
                                diff_LociVS= bird_data$diff_LociVS,
-                               mod_diff_LociVS= bird_data$mod_diff_LociVS,
-                               dichro= bird_data$dichro, 
-                               sexual_dichro= bird_data$sexual_dichro,
                                midpoint_lat= abs(bird_data$midpoint_lat),
                                log_mass= log10(bird_data$mass),
                                survival= bird_data$survival,
@@ -161,24 +159,28 @@ mulTree(mulTree.data = multree_birds,
 
 ```
 
-Read in the Survial model
+Read in the survival models and get the overall summary
 
 ```{r Survial multree read}
 
 multree_surv_res <- read.mulTree("bird_survival_resids")
-str(multree_surv_res)
 
 summary(multree_surv_res)
+```
 
-read.mulTree("bird_survival_resids", convergence= TRUE)
+Check if all the chains converged, as indicated by a convergance value of less 
+than 1.1
 
+```{r Survial multree conv}
 
-surv_resids <- multree_birds$data[,10] - c(summary(multree_surv_res)[1] 
-                                           + multree_birds$data$log_mass*summary(multree_surv_res)[2]
-                                           + multree_birds$data$midpoint_lat*summary(multree_surv_res)[3])
+multree_surv_conv <- read.mulTree("bird_survival_resids", convergence= TRUE)
+all(unlist(multree_surv_conv) < 1.1)
 
-
-surv_resids
+#calculate the residuals
+surv_resids <- multree_birds$data[,10] - 
+      c(summary(multree_surv_res)[1] 
+        + multree_birds$data$log_mass*summary(multree_surv_res)[2]
+        + multree_birds$data$midpoint_lat*summary(multree_surv_res)[3])
 
 ```
 
@@ -202,21 +204,25 @@ mulTree(mulTree.data = multree_birds,
 
 Read in the max lifespan model
 
-```{r Max_lifespan multree, eval = FALSE}
+```{r Max_lifespan multree read}
 
 multree_max_lifespan_res <- read.mulTree("bird_max_lifespan_resids")
-str(multree_max_lifespan_res)
-
 summary(multree_max_lifespan_res)
 
-read.mulTree("bird_max_lifespan_resids", convergence= TRUE)
+```
 
 
-max_life_resids <- multree_birds$data[,11] - c(summary(multree_max_lifespan_res)[1] 
-                                           + multree_birds$data$log_mass*summary(multree_max_lifespan_res)[2]
-                                            + multree_birds$data$midpoint_lat*summary(multree_max_lifespan_res)[3])
-max_life_resids
+```{r Max_lifespan multree conv}
 
+multree_max_lifespan_con <- read.mulTree("bird_max_lifespan_resids", 
+                                         convergence= TRUE)
+all(unlist(multree_max_lifespan_con) < 1.1)
+
+
+max_life_resids <- multree_birds$data[,11] - 
+      c(summary(multree_max_lifespan_res)[1] 
+        + multree_birds$data$log_mass*summary(multree_max_lifespan_res)[2]
+        + multree_birds$data$midpoint_lat*summary(multree_max_lifespan_res)[3])
 
 ```
 
@@ -238,32 +244,37 @@ mulTree(mulTree.data = multree_birds,
         chains= 2)
 ```
 
-Read in the Age at first reproduction model
+Read in the Age at first reproduction models and get the overall summary
 
 ```{r age at first reproduction read}
 
 multree_first_breed_res <- read.mulTree("bird_first_breed_resids")
-str(multree_first_breed_res)
-
 summary(multree_first_breed_res)
 
-read.mulTree("bird_first_breed_resids", convergence= TRUE)
 
+```
 
-first_breed_resids <- multree_birds$data[,12] - c(summary(multree_first_breed_res)[1] 
-                                           + multree_birds$data$log_mass*summary(multree_first_breed_res)[2]
-                                           + multree_birds$data$midpoint_lat*summary(multree_first_breed_res)[3])
-first_breed_resids
+Check if all the chains converged, as indicated by a convergance value of less 
+than 1.1
 
+```{r age at first reproduction converge}
 
+multree_first_breed_conv <-read.mulTree("bird_first_breed_resids", convergence= TRUE)
+all(unlist(multree_first_breed_conv) < 1.1)
+
+#calculate the residuals
+first_breed_resids <- multree_birds$data[,12] - 
+        c(summary(multree_first_breed_res)[1] 
+         + multree_birds$data$log_mass*summary(multree_first_breed_res)[2]
+         + multree_birds$data$midpoint_lat*summary(multree_first_breed_res)[3])
 ```
 
 
 # PCA
 
 We then create a PCA using the residuals form the above three models
-
 First create a dataset of the residuals.
+
 ```{r resids dataframe}
 res_fast_slow_bird_data <- data.frame(surv_resids, 
                                       max_life_resids, 
@@ -275,8 +286,9 @@ Next run the PCA
 
 ```{r PCA}
 pca_data <- data.frame(surv_resids= res_fast_slow_bird_data$surv_resids,
-                       max_life_resids= res_fast_slow_bird_data$max_life_resids,
-                       first_breed_resids= res_fast_slow_bird_data$first_breed_resids)
+                max_life_resids= res_fast_slow_bird_data$max_life_resids,
+                first_breed_resids= res_fast_slow_bird_data$first_breed_resids)
+
 biplot(prcomp(pca_data))
 prcomp(pca_data)
 
@@ -300,9 +312,6 @@ nrow(fast_slow_bird_data)
 fast_slow_bird_data <- data.frame(animal= fast_slow_bird_data$animal,
                                   latin_name= fast_slow_bird_data$sp.col,
                                   diff_LociVS= fast_slow_bird_data$diff_LociVS,
-                                  mod_diff_LociVS= fast_slow_bird_data$mod_diff_LociVS,
-                                  dichro= fast_slow_bird_data$dichro, 
-                                  sexual_dichro= fast_slow_bird_data$sexual_dichro,
                                   midpoint_lat= fast_slow_bird_data$midpoint_lat,
                                   log_mass= fast_slow_bird_data$log_mass,
                                   mating_system= fast_slow_bird_data$mating_system,
